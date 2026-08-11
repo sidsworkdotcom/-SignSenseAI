@@ -105,7 +105,7 @@ docs/                      weekly plan, commit plan, logs
 - Threshold tuning and larger vocabulary (50-100 signs) for word mode
 - LSTM inference in the browser demo
 - Two-hand and pose features to support signs the hand-only model cannot separate
-- Deployment at a public URL
+- Deployment of the browser demo at signsenseai.siddheshgupta.com
 
 ## References
 
