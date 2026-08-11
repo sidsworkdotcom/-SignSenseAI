@@ -1,0 +1,13 @@
+# NEVER commit these
+venv/
+__pycache__/
+*.pyc
+.vscode/
+.DS_Store
+
+# Huge raw datasets stay local (folders of images / 55GB parquet)
+data/kaggle_raw/
+archive/
+
+# Everything else IS committed: src, config, docs, web,
+# models/*.pth, data/landmarks.csv, outputs/*.png

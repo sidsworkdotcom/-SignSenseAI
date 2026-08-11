@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignSense AI — Live Demo</title>
+<meta name="description" content="Real-time ASL fingerspelling recognition in your browser. MediaPipe hand landmarks + a custom neural network, running fully client-side.">
+<style>
+  :root{
+    --bg:#0d1013; --panel:rgba(24,28,33,.82); --panel-line:rgba(255,255,255,.07);
+    --ink:#e8ecef; --ink-dim:#8b949c; --mint:#4be3a4; --amber:#e3b34b; --red:#e35c4b;
+    --mono:"SF Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--ink);font:15px/1.5 "Segoe UI",system-ui,sans-serif;
+       min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:20px 14px 40px}
+  header{width:100%;max-width:960px;display:flex;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  header h1{font-size:19px;font-weight:600;letter-spacing:.4px}
+  header h1 b{color:var(--mint);font-weight:600}
+  header .sub{color:var(--ink-dim);font-size:12.5px}
+  #stage{position:relative;width:100%;max-width:960px;border-radius:14px;overflow:hidden;
+         background:#000;border:1px solid var(--panel-line);aspect-ratio:4/3}
+  #stage::after{content:"";position:absolute;inset:0;pointer-events:none;
+         box-shadow:inset 0 0 120px rgba(0,0,0,.55);border-radius:14px}
+  video{display:none}
+  canvas{width:100%;height:100%;display:block;transform:scaleX(-1)}
+  .overlay{position:absolute;left:0;right:0;display:flex;pointer-events:none}
+
+  /* prediction card */
+  #card{position:absolute;top:14px;left:14px;background:var(--panel);backdrop-filter:blur(8px);
+        border:1px solid var(--panel-line);border-radius:12px;padding:12px 16px;min-width:190px}
+  #pred{font:600 44px/1 var(--mono);color:var(--mint);min-height:46px}
+  #conf-bar,#hold-bar{height:5px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:8px;overflow:hidden}
+  #conf-fill{height:100%;width:0;background:var(--mint);border-radius:3px;transition:width .12s}
+  #hold-fill{height:100%;width:0;background:var(--amber);border-radius:3px}
+  .lbl{font:10.5px var(--mono);color:var(--ink-dim);letter-spacing:1.2px;text-transform:uppercase;margin-top:9px}
+  #alts{font:12px var(--mono);color:var(--ink-dim);margin-top:7px;min-height:15px}
+
+  /* status pill */
+  #status{position:absolute;top:14px;right:14px;background:var(--panel);backdrop-filter:blur(8px);
+          border:1px solid var(--panel-line);border-radius:999px;padding:7px 14px;
+          display:flex;align-items:center;gap:8px;font:12px var(--mono)}
+  #dot{width:8px;height:8px;border-radius:50%;background:var(--red)}
+  #dot.on{background:var(--mint);box-shadow:0 0 8px var(--mint);animation:pulse 1.6s infinite}
+  @keyframes pulse{50%{opacity:.5}}
+
+  /* sentence bar */
+  #sentbar{position:absolute;left:14px;right:14px;bottom:14px;background:var(--panel);
+           backdrop-filter:blur(8px);border:1px solid var(--panel-line);border-radius:12px;
+           padding:12px 16px;font:600 20px var(--mono);letter-spacing:2px;min-height:50px;
+           display:flex;align-items:center;overflow:hidden;white-space:nowrap}
+  #cursor{display:inline-block;width:10px;height:24px;background:var(--mint);margin-left:3px;
+          animation:blink 1s steps(1) infinite;vertical-align:middle}
+  @keyframes blink{50%{opacity:0}}
+  #stage.flash{animation:flash .35s}
+  @keyframes flash{0%{box-shadow:0 0 0 3px var(--mint) inset}100%{box-shadow:none}}
+
+  /* controls */
+  #controls{width:100%;max-width:960px;display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center}
+  button{background:var(--panel);color:var(--ink);border:1px solid var(--panel-line);border-radius:9px;
+         padding:9px 18px;font:600 13.5px "Segoe UI",sans-serif;cursor:pointer}
+  button:hover{border-color:var(--mint);color:var(--mint)}
+  button:focus-visible{outline:2px solid var(--mint);outline-offset:2px}
+  button.primary{background:var(--mint);color:#08130e;border-color:var(--mint)}
+  .keys{margin-left:auto;color:var(--ink-dim);font:11.5px var(--mono);display:flex;gap:12px;flex-wrap:wrap}
+  .keys kbd{background:rgba(255,255,255,.08);border:1px solid var(--panel-line);border-bottom-width:2px;
+            border-radius:5px;padding:1px 6px;font:inherit}
+  #boot{position:absolute;inset:0;display:flex;flex-direction:column;gap:14px;align-items:center;
+        justify-content:center;background:var(--bg);z-index:5;text-align:center;padding:20px}
+  #boot p{color:var(--ink-dim);max-width:420px;font-size:13.5px}
+  footer{margin-top:22px;color:var(--ink-dim);font-size:12.5px;text-align:center}
+  footer a{color:var(--mint);text-decoration:none}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  @media (max-width:560px){#pred{font-size:34px} #card{min-width:150px;padding:10px 12px} .keys{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sign<b>Sense</b> AI</h1>
+  <span class="sub">real-time fingerspelling · runs fully in your browser · no video leaves your device</span>
+</header>
+
+<div id="stage">
+  <video id="video" playsinline></video>
+  <canvas id="canvas" width="960" height="720"></canvas>
+
+  <div id="boot">
+    <h1 style="font-size:22px">Sign<b style="color:var(--mint)">Sense</b> AI</h1>
+    <p>Hand landmarks are extracted with MediaPipe, then classified by a custom
+       neural network trained in PyTorch and exported to the browser.
+       Hold a sign steady to type it.</p>
+    <button class="primary" id="start">Start camera</button>
+    <p id="boot-err" style="color:var(--red)"></p>
+  </div>
+
+  <div id="card">
+    <div id="pred">–</div>
+    <div class="lbl">confidence</div><div id="conf-bar"><div id="conf-fill"></div></div>
+    <div class="lbl">hold to type</div><div id="hold-bar"><div id="hold-fill"></div></div>
+    <div id="alts"></div>
+  </div>
+
+  <div id="status"><span id="dot"></span><span id="status-txt">no hand</span></div>
+
+  <div id="sentbar"><span id="sentence"></span><span id="cursor"></span></div>
+</div>
+
+<div id="controls">
+  <button id="btn-space">Space</button>
+  <button id="btn-back">Backspace</button>
+  <button id="btn-clear">Clear</button>
+  <button id="btn-voice">Voice: on</button>
+  <span class="keys">
+    <span><kbd>space</kbd> space</span><span><kbd>⌫</kbd> undo</span>
+    <span><kbd>V</kbd> voice</span><span><kbd>C</kbd> clear</span>
+  </span>
+</div>
+
+<footer>Custom MLP (~60K params) · MediaPipe Hands · <a href="https://github.com/sidsworkdotcom/-SignSenseAI">source on GitHub</a></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script>
+"use strict";
+/* ---------------- model: load + pure-JS forward pass ---------------- */
+let MODEL = null;
+fetch("model.json").then(r => {
+  if (!r.ok) throw new Error("model.json not found — run src/export_web.py and upload it next to index.html");
+  return r.json();
+}).then(m => { MODEL = m; }).catch(e => {
+  document.getElementById("boot-err").textContent = e.message;
+});
+
+function forward(x){                      // x: Float64Array(63) -> softmax probs
+  let h = x;
+  for (const L of MODEL.layers){
+    const out = new Float64Array(L.b.length);
+    for (let i = 0; i < L.b.length; i++){
+      let s = L.b[i]; const w = L.W[i];
+      for (let j = 0; j < h.length; j++) s += w[j] * h[j];
+      out[i] = L.relu && s < 0 ? 0 : s;
+    }
+    h = out;
+  }
+  const mx = Math.max(...h); let z = 0;
+  const p = h.map(v => { const e = Math.exp(v - mx); z += e; return e; });
+  return p.map(v => v / z);
+}
+
+/* same normalization as src/utils.py: wrist origin + max-distance scale */
+function normalize(lms){
+  const v = new Float64Array(63);
+  const w = lms[0];
+  let scale = 0;
+  for (let i = 0; i < 21; i++){
+    const dx = lms[i].x - w.x, dy = lms[i].y - w.y, dz = lms[i].z - w.z;
+    v[i*3] = dx; v[i*3+1] = dy; v[i*3+2] = dz;
+    scale = Math.max(scale, Math.hypot(dx, dy, dz));
+  }
+  if (scale > 1e-6) for (let i = 0; i < 63; i++) v[i] /= scale;
+  return v;
+}
+
+/* ---------------- app state ---------------- */
+const $ = id => document.getElementById(id);
+const canvas = $("canvas"), ctx = canvas.getContext("2d");
+let sentence = "", voiceOn = true, lastCommit = 0, lastSignTime = 0, spokenUpto = 0;
+let holdLabel = null, holdStart = 0;
+const HOLD_S = 0.9, COOLDOWN_S = 0.5, WORD_PAUSE_S = 2.5;
+const window_ = [];   // smoothing window of top labels
+
+function speak(text){
+  if (!voiceOn || !text.trim() || !window.speechSynthesis) return;
+  speechSynthesis.speak(new SpeechSynthesisUtterance(text.trim()));
+}
+function commitWordIfPaused(now){
+  if (sentence.length > spokenUpto && lastSignTime && now - lastSignTime > WORD_PAUSE_S){
+    speak(sentence.slice(spokenUpto));
+    spokenUpto = sentence.length;
+  }
+}
+function addChar(ch){
+  sentence += ch;
+  $("sentence").textContent = sentence.replaceAll(" ", "\u00A0");
+  $("stage").classList.add("flash");
+  setTimeout(() => $("stage").classList.remove("flash"), 380);
+}
+function doSpace(){ speak(sentence.slice(spokenUpto)); spokenUpto = sentence.length + 1; addChar(" "); }
+function doBack(){ sentence = sentence.slice(0, -1); spokenUpto = Math.min(spokenUpto, sentence.length);
+                   $("sentence").textContent = sentence.replaceAll(" ", "\u00A0"); }
+function doClear(){ sentence = ""; spokenUpto = 0; $("sentence").textContent = ""; }
+function toggleVoice(){ voiceOn = !voiceOn; $("btn-voice").textContent = "Voice: " + (voiceOn ? "on" : "off"); }
+
+$("btn-space").onclick = doSpace; $("btn-back").onclick = doBack;
+$("btn-clear").onclick = doClear; $("btn-voice").onclick = toggleVoice;
+addEventListener("keydown", e => {
+  if (e.key === " "){ e.preventDefault(); doSpace(); }
+  else if (e.key === "Backspace") doBack();
+  else if (e.key.toLowerCase() === "v") toggleVoice();
+  else if (e.key.toLowerCase() === "c") doClear();
+});
+
+/* ---------------- per-frame results ---------------- */
+function onResults(res){
+  ctx.save();
+  ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+  const now = performance.now() / 1000;
+  const hand = res.multiHandLandmarks && res.multiHandLandmarks[0];
+
+  if (hand && MODEL){
+    drawConnectors(ctx, hand, HAND_CONNECTIONS, {color:"rgba(75,227,164,.65)", lineWidth:2.5});
+    drawLandmarks(ctx, hand, {color:"#4be3a4", lineWidth:1, radius:2.5});
+
+    const probs = forward(normalize(hand));
+    const order = probs.map((p,i)=>[p,i]).sort((a,b)=>b[0]-a[0]);
+    const [p1,i1] = order[0];
+
+    window_.push(i1); if (window_.length > MODEL.smoothing_window) window_.shift();
+    const counts = {}; let best = i1, bestN = 0;
+    for (const l of window_){ counts[l]=(counts[l]||0)+1; if (counts[l]>bestN){bestN=counts[l];best=l;} }
+
+    const label = MODEL.labels[best];
+    const conf = probs[best];
+    $("pred").textContent = label.toUpperCase();
+    $("conf-fill").style.width = (conf*100).toFixed(0)+"%";
+    $("conf-fill").style.background = conf >= MODEL.confidence_threshold ? "var(--mint)" : "var(--red)";
+    $("alts").textContent = order.slice(1,3).map(([p,i]) =>
+      `${MODEL.labels[i].toUpperCase()} ${(p*100).toFixed(0)}%`).join("   ");
+    $("dot").classList.add("on"); $("status-txt").textContent = "tracking";
+    lastSignTime = now;
+
+    /* hold-to-type */
+    if (conf >= MODEL.confidence_threshold){
+      if (label !== holdLabel){ holdLabel = label; holdStart = now; }
+      const frac = Math.min(1, (now - holdStart) / HOLD_S);
+      $("hold-fill").style.width = (frac*100).toFixed(0)+"%";
+      if (frac >= 1 && now - lastCommit > COOLDOWN_S){
+        if (label.length > 1){                 // word gesture
+          speak(sentence.slice(spokenUpto));   // flush any spelled word
+          if (sentence && !sentence.endsWith(" ")) sentence += " ";
+          sentence += label.toUpperCase() + " ";
+          spokenUpto = sentence.length;
+          $("sentence").textContent = sentence.replaceAll(" ", "\u00A0");
+          $("stage").classList.add("flash");
+          setTimeout(() => $("stage").classList.remove("flash"), 380);
+          speak(label);
+        } else addChar(label);
+        lastCommit = now; holdStart = now;
+      }
+    } else { holdLabel = null; $("hold-fill").style.width = "0"; }
+  } else {
+    $("dot").classList.remove("on"); $("status-txt").textContent = "no hand";
+    $("pred").textContent = "–"; $("alts").textContent = "";
+    $("conf-fill").style.width = "0"; $("hold-fill").style.width = "0";
+    holdLabel = null;
+    commitWordIfPaused(now);
+  }
+  ctx.restore();
+}
+
+/* ---------------- camera boot ---------------- */
+$("start").onclick = async () => {
+  if (!MODEL){ $("boot-err").textContent = "Model still loading — try again in a second."; return; }
+  const hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+  hands.setOptions({maxNumHands:1, modelComplexity:1, minDetectionConfidence:.7, minTrackingConfidence:.6});
+  hands.onResults(onResults);
+  const video = $("video");
+  try {
+    const cam = new Camera(video, {
+      onFrame: async () => { await hands.send({image: video}); },
+      width: 960, height: 720
+    });
+    await cam.start();
+    $("boot").style.display = "none";
+  } catch (e){
+    $("boot-err").textContent = "Camera access failed: " + e.message;
+  }
+};
+</script>
+</body>
+</html>
