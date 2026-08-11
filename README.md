@@ -97,7 +97,7 @@ src/
   export_web.py            folds BatchNorm into weights, exports model.json
   speech.py, ui.py         TTS thread, drawing helpers
 web/index.html             browser demo (MediaPipe JS + JS forward pass)
-docs/                      weekly plan, commit plan, logs
+docs/                      development notes, logs
 ```
 
 ## Planned
