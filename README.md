@@ -1,158 +1,114 @@
-# SignSense AI 🤟
+# SignSense AI
 
-**An Intelligent Sign Language Recognition System Using Deep Learning and Computer Vision**
+Real-time American Sign Language recognition from a webcam. MediaPipe extracts
+21 hand landmarks per frame; custom PyTorch networks classify them — an MLP for
+static signs (fingerspelling) and an LSTM for motion signs — and the app builds
+sentences on screen with text-to-speech output. A browser version runs the same
+model fully client-side, so the web demo needs no server and no video ever
+leaves the device.
 
-SignSense AI recognizes American Sign Language (ASL) hand signs in real time from a webcam feed. It combines **MediaPipe** hand-landmark detection (computer vision) with a **custom neural network built in PyTorch** (deep learning) to classify signs, smooth predictions over time, and build words/sentences live on screen.
-
----
-
-## 🏗️ Architecture
+## How it works
 
 ```
- Webcam Frame
-      │
-      ▼
- MediaPipe Hands ──► 21 hand landmarks (x, y, z)
-      │
-      ▼
- Landmark Normalization (translation + scale invariant)
-      │
-      ▼
- ┌─────────────────────────────┐
- │  SignNet (PyTorch MLP)      │   ← static signs (A–Z, etc.)
- │  63 → 256 → 128 → 64 → C    │
- │  BatchNorm + Dropout        │
- └─────────────────────────────┘
-      │
-      ▼
- Temporal smoothing (majority vote over sliding window)
-      │
-      ▼
- On-screen prediction + sentence builder
+webcam -> MediaPipe Hands -> 21 landmarks -> normalize (wrist origin, scale)
+       -> SignNet MLP (static signs)          -> smoothing -> sentence + TTS
+       -> SignNetLSTM (motion signs, 30-frame clips) ->
 ```
 
-An optional **LSTM head (SignNetLSTM)** is included for dynamic gestures (signs that involve motion, e.g., "J", "Z", "hello"), trained on sequences of 30 frames of landmarks.
+Landmarks instead of raw pixels is the core design decision: after
+normalization the input is 63 numbers describing pure hand geometry, so a ~60K
+parameter MLP trains in under a minute on CPU and runs at <1 ms per inference.
+A CNN on pixels would need far more data and compute, and would partly learn
+background and lighting instead of hand shape.
 
-## ✨ Features
+## Results
 
-**Recognition engine**
-- Real-time recognition (30+ FPS on CPU — no GPU required, <1 ms inference)
-- Custom PyTorch MLP with BatchNorm, Dropout, early stopping, LR scheduling
-- Optional LSTM model for motion-based signs
-- Landmark normalization → robust to hand position, distance from camera
-- On-the-fly data augmentation (jitter, rotation, scaling of landmarks)
-- Full evaluation suite: accuracy/loss curves, confusion matrix, per-class report
+| Model       | Task                          | Test acc. | Params | Training data |
+|-------------|-------------------------------|-----------|--------|---------------|
+| SignNet MLP | 28 static signs (A-Z, del, space) | 99.86%    | 60K    | Kaggle ASL Alphabet, converted to landmarks (9,398 samples) |
+| SignNetLSTM | 25 motion signs               | 78.99%    | 241K   | Google asl-signs (9,486 sequences, hand landmarks only) |
 
-**Real-time app UI** (custom design system in `src/ui.py` — real TTF typography,
-translucent rounded panels, single accent color)
-- Live prediction card with confidence meter and **top-3 alternatives**
-- "Hold to type" stability meter showing how close a letter is to committing
-- Sentence bar with blinking cursor, SPACE / BACKSPACE / clear support
-- Commit flash animation + pulsing tracking indicator
-- Corner-bracket hand framing, FPS / inference-latency / session-time readout
+Live accuracy is lower than test accuracy for both models due to domain shift
+(different signer, camera, and frame rate than the training data). Notable
+findings so far: MediaPipe z-coordinates hurt more than they help (removed);
+horizontal-flip augmentation makes the LSTM robust to the mirrored selfie view
+at a cost of 1.3 points of test accuracy; the LSTM has no out-of-vocabulary
+rejection, so unknown motions map to the nearest known sign.
 
-**Dataset recorder UI**
-- 3-2-1 countdown before each recording burst
-- Live per-class progress bars toward the 250-sample target (TAB toggles panel)
-- Pause/resume, continuous saving (nothing lost on quit), session summary
+## Setup
 
-## 📦 Installation
+Python 3.9-3.11 (MediaPipe requirement — 3.12+ ships an incompatible API).
 
-```bash
-git clone https://github.com/sidsworkdotcom/-SignSenseAI.git
-cd -SignSenseAI
+```
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+venv\Scripts\activate          # Linux/macOS: source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-> Python 3.9–3.11 recommended (MediaPipe compatibility).
+## Usage
 
-## 🚀 Usage
+Static signs, trained from the Kaggle ASL Alphabet dataset:
 
-### 1. Collect your dataset
+```
+python src/kaggle_to_landmarks.py --dataset <path to A/B/C... folders> --limit 400
+python src/train.py
+python src/evaluate.py         # confusion matrix, per-class F1
+```
 
-```bash
+Or record your own signs with the webcam (letter keys record letters, digit
+keys record the word gestures defined in config.py):
+
+```
 python src/data_collection.py
 ```
 
-- Press the key of the sign label you want to record (e.g. `a`, `b`, `c` …)
-- Hold the sign in front of the camera; samples are recorded automatically
-- Press `SPACE` to pause/resume, `q` to quit
-- Landmarks are appended to `data/landmarks.csv`
+Motion signs train on Google's asl-signs dataset. Run `kaggle_train_lstm.py`
+in a Kaggle notebook with the competition dataset attached (nothing to
+download; free GPU), then place the resulting `signnet_lstm.pth` and
+`lstm_label_map.json` in `models/`.
 
-Aim for **200–300 samples per sign**, varying distance, angle and lighting.
+Live recognition:
 
-### 2. Train the model
-
-```bash
-python src/train.py
 ```
-
-Produces:
-- `models/signnet.pth` — best model checkpoint (by validation accuracy)
-- `models/label_map.json` — class index ↔ label mapping
-- `outputs/training_curves.png` — loss & accuracy curves
-
-### 3. Evaluate
-
-```bash
-python src/evaluate.py
-```
-
-Produces a classification report and `outputs/confusion_matrix.png`.
-
-### 4. Run real-time recognition
-
-```bash
 python src/realtime.py
 ```
 
-- Predicted sign + confidence shown live
-- Stable predictions get appended to the sentence bar
-- `c` clears the sentence, `q` quits
+Keys: `M` toggles letter/word mode, `R` records a word sign (2 s window),
+`SPACE` word break, `BACKSPACE` undo, `V` voice on/off, `C` clear, `Q` quit.
 
-## 📁 Project Structure
+Browser demo: `python src/export_web.py` writes `web/model.json`; serve
+`web/index.html` and `web/model.json` from any static host with HTTPS.
+
+## Structure
 
 ```
-SignSenseAI/
-├── config.py              # All hyperparameters & paths in one place
-├── requirements.txt
-├── src/
-│   ├── utils.py           # Landmark extraction & normalization
-│   ├── data_collection.py # Webcam dataset recorder
-│   ├── dataset.py         # PyTorch Dataset + augmentation
-│   ├── model.py           # SignNet (MLP) + SignNetLSTM
-│   ├── train.py           # Training loop w/ early stopping
-│   ├── evaluate.py        # Confusion matrix + metrics
-│   └── realtime.py        # Live webcam inference app
-├── data/                  # Collected landmark CSVs (gitignored)
-├── models/                # Trained checkpoints
-├── outputs/               # Plots & reports
-└── docs/
-    └── WEEKLY_PLAN.md     # Development roadmap
+config.py                  hyperparameters and paths
+kaggle_train_lstm.py       self-contained Kaggle notebook script (LSTM)
+src/
+  utils.py                 hand detection, normalization, resampling
+  data_collection.py       webcam dataset recorder
+  kaggle_to_landmarks.py   Kaggle ASL Alphabet -> landmarks.csv
+  prepare_asl_signs.py     asl-signs parquet -> LSTM sequences (local variant)
+  dataset.py               PyTorch dataset + landmark augmentation
+  model.py                 SignNet MLP, SignNetLSTM
+  train.py / train_lstm.py training loops
+  evaluate.py              metrics and confusion matrix
+  realtime.py              live app (letter + word modes)
+  export_web.py            folds BatchNorm into weights, exports model.json
+  speech.py, ui.py         TTS thread, drawing helpers
+web/index.html             browser demo (MediaPipe JS + JS forward pass)
+docs/                      weekly plan, commit plan, logs
 ```
 
-## 🧠 Why landmarks instead of raw images?
+## Planned
 
-Feeding raw pixels into a CNN needs huge datasets and GPUs, and the model learns background/lighting instead of the hand shape. MediaPipe gives us 21 precise 3-D keypoints per hand; after normalization the input is only **63 numbers** that describe pure hand geometry. A compact MLP trained on a few thousand samples then reaches >98% accuracy and runs in real time on CPU — a much better engineering trade-off, and the neural network is still fully ours.
+- Threshold tuning and larger vocabulary (50-100 signs) for word mode
+- LSTM inference in the browser demo
+- Two-hand and pose features to support signs the hand-only model cannot separate
+- Deployment at a public URL
 
-## 📊 Results (fill in after training)
+## References
 
-| Model       | Val Accuracy | Test Accuracy | Params |
-|-------------|--------------|---------------|--------|
-| SignNet MLP | –            | –             | ~60K   |
-| SignNetLSTM | –            | –             | ~230K  |
-
-## 🔮 Roadmap
-
-- [ ] Two-hand sign support
-- [ ] Dynamic gesture vocabulary via LSTM
-- [ ] Text-to-speech output for recognized sentences
-- [ ] Web demo (Streamlit)
-
-## 📚 References
-
-- Zhang et al., *MediaPipe Hands: On-device Real-time Hand Tracking* (2020)
-- Goodfellow, Bengio, Courville, *Deep Learning* — MLP regularization
-- Hochreiter & Schmidhuber, *Long Short-Term Memory* (1997)
+- Zhang et al., MediaPipe Hands: On-device Real-time Hand Tracking, 2020
+- Hochreiter & Schmidhuber, Long Short-Term Memory, 1997
+- Google - Isolated Sign Language Recognition, Kaggle, 2023
